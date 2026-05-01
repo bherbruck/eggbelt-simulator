@@ -1025,10 +1025,13 @@ function visualStep(dt: number): void {
   }
   applyLightAngle(az, el, dist)
 
+  // deterministic flicker — sin-of-incommensurate-frequencies, so fps
+  // sampling rate doesn't change the underlying signal
   const fk = 1 + (
-    Math.sin(t * 9 + flickerSeed) * 0.3 +
-    Math.sin(t * 23 + flickerSeed * 1.7) * 0.2 +
-    (Math.random() - 0.5) * 0.4
+    Math.sin(t * 9.0  + flickerSeed) * 0.30 +
+    Math.sin(t * 23.0 + flickerSeed * 1.7) * 0.18 +
+    Math.sin(t * 41.0 + flickerSeed * 0.7) * 0.12 +
+    Math.sin(t * 7.3  + flickerSeed * 2.3) * 0.10
   ) * params.flicker
   keyLight.intensity = params.keyIntensity * fk
   keyLight2.intensity = params.keyIntensity * 0.6 * (2 - fk)
