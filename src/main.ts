@@ -975,10 +975,12 @@ applyRenderSize()
 
 // ---------------- loop ----------------
 const statsEl = document.getElementById('stats') as HTMLElement
+const PHYSICS_DT = 1 / 60
 let last = performance.now()
 let fpsAccum = 0
 let fpsCount = 0
-let frameAccum = 0
+let physicsAccum = 0
+let renderAccum = 0
 let simT = 0
 const flickerSeed = Math.random() * 1000
 
@@ -990,7 +992,22 @@ const orbitPhase = {
   d:   Math.random() * 1000,
 }
 
-function step(dt: number): void {
+// physics step at fixed PHYSICS_DT — independent of render fps
+function physicsStep(dt: number): void {
+  tickSpawner(dt)
+  driveEggs(dt)
+  world.timestep = dt
+  world.step()
+  for (const e of eggs) {
+    const tt = e.body.translation()
+    const r = e.body.rotation()
+    e.mesh.position.set(tt.x, tt.y, tt.z)
+    e.mesh.quaternion.set(r.x, r.y, r.z, r.w)
+  }
+}
+
+// per-render visual updates (lights, texture scroll). dt = render period.
+function visualStep(dt: number): void {
   simT += dt
   const t = simT
 
@@ -1020,19 +1037,6 @@ function step(dt: number): void {
   beltSet.map.offset.y = (beltSet.map.offset.y + scroll) % 1
   beltSet.normalMap.offset.y = beltSet.map.offset.y
   if (beltSet.roughnessMap) beltSet.roughnessMap.offset.y = beltSet.map.offset.y
-
-  tickSpawner(dt)
-  driveEggs(dt)
-  // sync physics integration with our actual frame period (was hard-coded 1/60)
-  world.timestep = dt
-  world.step()
-
-  for (const e of eggs) {
-    const tt = e.body.translation()
-    const r = e.body.rotation()
-    e.mesh.position.set(tt.x, tt.y, tt.z)
-    e.mesh.quaternion.set(r.x, r.y, r.z, r.w)
-  }
 }
 
 function renderFrame(): void {
@@ -1077,22 +1081,33 @@ function loop(now: number): void {
   requestAnimationFrame(loop)
   const elapsed = Math.min((now - last) / 1000, 0.1)
   last = now
-  frameAccum += elapsed
-  const period = 1 / Math.max(1, params.targetFps)
-  if (frameAccum < period) return
-  // discard excess to avoid spiral; cap catch-up to one period
-  frameAccum = Math.min(frameAccum % period, period)
 
-  step(period)
-  renderFrame()
+  // physics: step at fixed PHYSICS_DT, decoupled from render fps
+  physicsAccum += elapsed
+  let steps = 0
+  while (physicsAccum >= PHYSICS_DT && steps < 12) {
+    physicsStep(PHYSICS_DT)
+    physicsAccum -= PHYSICS_DT
+    steps++
+  }
+  if (steps >= 12) physicsAccum = 0 // cap catch-up to avoid spiral
 
-  fpsAccum += period
-  fpsCount++
-  if (fpsAccum > 0.5) {
-    const fps = fpsCount / fpsAccum
-    fpsAccum = 0
-    fpsCount = 0
-    statsEl.textContent = `eggs ${eggs.length} · ${fps.toFixed(0)} fps`
+  // render: snapshot at targetFps
+  const renderPeriod = 1 / Math.max(1, params.targetFps)
+  renderAccum += elapsed
+  if (renderAccum >= renderPeriod) {
+    visualStep(renderAccum)
+    renderFrame()
+    renderAccum = renderAccum % renderPeriod
+
+    fpsAccum += renderPeriod
+    fpsCount++
+    if (fpsAccum > 0.5) {
+      const fps = fpsCount / fpsAccum
+      fpsAccum = 0
+      fpsCount = 0
+      statsEl.textContent = `eggs ${eggs.length} · ${fps.toFixed(0)} fps`
+    }
   }
 }
 requestAnimationFrame(loop)
