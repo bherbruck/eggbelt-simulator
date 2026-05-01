@@ -88,6 +88,15 @@ interface Params {
   showBboxes: boolean
   showObbs: boolean
 
+  generalize: boolean
+  generalizeInterval: number
+  generalizeBelt: boolean
+  generalizeWalls: boolean
+  generalizeEggs: boolean
+  generalizeLight: boolean
+  generalizeCamera: boolean
+  generalizeBg: boolean
+
   filterEnabled: boolean
   pixelation: number
   noise: number
@@ -127,7 +136,7 @@ const DEFAULTS: Params = {
   eggFriction: 0.9,
   eggMassScale: 1.0,
   beltGrip: 12.0,
-  beltAngularDamp: 6.0,
+  beltAngularDamp: 0.0,
 
   ambient: 0.22,
   hemi: 0.25,
@@ -154,6 +163,15 @@ const DEFAULTS: Params = {
   targetFps: 30,
   showBboxes: false,
   showObbs: false,
+
+  generalize: false,
+  generalizeInterval: 4,
+  generalizeBelt: true,
+  generalizeWalls: true,
+  generalizeEggs: true,
+  generalizeLight: true,
+  generalizeCamera: false,
+  generalizeBg: true,
 
   filterEnabled: false,
   pixelation: 720,
@@ -808,6 +826,17 @@ renderCtrls.push(
 )
 fRender.add(params, 'targetFps', 1, 120, 1).name('fps')
 
+const fGen = gui.addFolder('generalization')
+fGen.add(params, 'generalize').name('enable')
+fGen.add(params, 'generalizeInterval', 0.5, 30, 0.25).name('interval (s)')
+fGen.add(params, 'generalizeBelt').name('vary belt')
+fGen.add(params, 'generalizeWalls').name('vary walls')
+fGen.add(params, 'generalizeEggs').name('vary eggs')
+fGen.add(params, 'generalizeLight').name('vary light')
+fGen.add(params, 'generalizeCamera').name('vary camera')
+fGen.add(params, 'generalizeBg').name('vary background')
+fGen.add({ now: () => randomizeAll() }, 'now').name('randomize now')
+
 const fCapture = gui.addFolder('capture')
 fCapture.add(params, 'showBboxes').name('show AABB')
 fCapture.add(params, 'showObbs').name('show OBB')
@@ -878,6 +907,79 @@ function applyPreset(name: 'clean' | 'cctv' | 'phonecam' | 'potato'): void {
   fFilter.controllers.forEach((c) => c.updateDisplay())
   saveParams()
 }
+
+// ---------------- generalization mode ----------------
+function randPick<T>(arr: readonly T[]): T { return arr[Math.floor(Math.random() * arr.length)] }
+function randByte(min = 30, max = 230): number { return Math.floor(min + Math.random() * (max - min)) }
+function randHex(min?: number, max?: number): string {
+  const r = randByte(min, max), g = randByte(min, max), b = randByte(min, max)
+  return '#' + [r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('')
+}
+
+function randomizeAll(): void {
+  if (params.generalizeBelt) {
+    const newStyle = randPick(BELT_STYLES)
+    if (newStyle !== params.beltStyle) {
+      params.beltStyle = newStyle
+      applyBeltStyle()
+    }
+    params.beltColor = Math.random() < 0.5 ? '#ffffff' : randHex(140, 250)
+    beltMat.color.set(params.beltColor)
+  }
+  if (params.generalizeWalls) {
+    const newStyle = randPick(WALL_STYLES)
+    if (newStyle !== params.wallStyle) {
+      params.wallStyle = newStyle
+      applyWallStyle()
+    }
+    params.wallColor = Math.random() < 0.4 ? '#ffffff' : randHex(80, 240)
+    wallMat.color.set(params.wallColor)
+  }
+  if (params.generalizeEggs) {
+    params.eggColor = randHex(180, 250)
+    params.eggColor2 = Math.random() < 0.4 ? params.eggColor : randHex(80, 220)
+    params.eggColorVariance = Math.random() * 0.4
+    params.eggDirtChance = Math.random() * 0.6
+    params.eggRoughness = 0.3 + Math.random() * 0.5
+    eggBaseMat.roughness = params.eggRoughness
+  }
+  if (params.generalizeLight) {
+    params.keyAzimuth = (Math.random() - 0.5) * Math.PI * 2
+    params.keyElevation = 0.25 + Math.random() * (Math.PI / 2 - 0.3)
+    params.keyDistance = 1 + Math.random() * 8
+    params.keyIntensity = 0.4 + Math.random() * 3.2
+    params.keyColor = randHex(180, 255)
+    params.ambient = Math.random() * 0.45
+    params.hemi = Math.random() * 0.4
+    params.fillIntensity = Math.random() * 1.5
+    params.fillColor = randHex(40, 200)
+    applyLightAngle(params.keyAzimuth, params.keyElevation, params.keyDistance)
+    keyLight.intensity = params.keyIntensity
+    keyLight2.intensity = params.keyIntensity * 0.6
+    keyLight.color.set(params.keyColor)
+    keyLight2.color.set(params.keyColor)
+    ambient.intensity = params.ambient
+    hemi.intensity = params.hemi
+    fillLight.intensity = params.fillIntensity
+    fillLight.color.set(params.fillColor)
+  }
+  if (params.generalizeCamera) {
+    params.cameraTilt = Math.random() * Math.PI * 0.4
+    params.cameraYaw = (Math.random() - 0.5) * Math.PI * 0.6
+    params.cameraDistance = 2 + Math.random() * 4
+    applyCameraFromParams()
+  }
+  if (params.generalizeBg) {
+    const c = new THREE.Color(randHex(0, 60))
+    scene.background = c
+    scene.fog = new THREE.FogExp2(c.getHex(), 0.02 + Math.random() * 0.1)
+  }
+  // refresh GUI controllers so they reflect the new values
+  gui.controllersRecursive().forEach((c) => c.updateDisplay())
+  saveParams()
+}
+
+let lastRandomize = 0
 
 // ---------------- capture (snapshot, video, labels) ----------------
 function buildLabels(): FrameLabels {
@@ -1010,6 +1112,12 @@ function physicsStep(dt: number): void {
 function visualStep(dt: number): void {
   simT += dt
   const t = simT
+
+  // generalization scheduler — fires randomizeAll every interval
+  if (params.generalize && t - lastRandomize >= params.generalizeInterval) {
+    randomizeAll()
+    lastRandomize = t
+  }
 
   let az = params.keyAzimuth
   let el = params.keyElevation
