@@ -541,8 +541,8 @@ function spawnEgg(): void {
 
   const bd = RAPIER.RigidBodyDesc.dynamic()
     .setTranslation(x, y, z)
-    .setLinearDamping(0.15)
-    .setAngularDamping(0.65)
+    .setLinearDamping(0.05)
+    .setAngularDamping(0.05)
     .setCcdEnabled(true)
   const body = world.createRigidBody(bd)
 
@@ -572,11 +572,11 @@ function spawnEgg(): void {
   const sv = 1 + (Math.random() * 2 - 1) * params.speedVariance
   // start at belt speed so contact doesn't jolt them into spinning
   body.setLinvel({ x: (Math.random() - 0.5) * 0.05, y: -0.15, z: dir * params.beltSpeed * sv }, true)
-  // mild initial tumble — the belt grip will damp it once they settle
+  // initial tumble — varied per axis so eggs come out spinning
   body.setAngvel({
-    x: (Math.random() - 0.5) * 1.5,
-    y: (Math.random() - 0.5) * 1.0,
-    z: (Math.random() - 0.5) * 1.5,
+    x: (Math.random() - 0.5) * 4.0,
+    y: (Math.random() - 0.5) * 2.0,
+    z: (Math.random() - 0.5) * 4.0,
   }, true)
 
   eggs.push({ mesh, body, mat, speedJitter: sv, radius: r, halfLength: longAxis, verts: variant.vertices })
