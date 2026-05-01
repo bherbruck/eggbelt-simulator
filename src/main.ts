@@ -835,7 +835,15 @@ fGen.add(params, 'generalizeEggs').name('vary eggs')
 fGen.add(params, 'generalizeLight').name('vary light')
 fGen.add(params, 'generalizeCamera').name('vary camera')
 fGen.add(params, 'generalizeBg').name('vary background')
-fGen.add({ now: () => randomizeAll() }, 'now').name('randomize now')
+fGen.add({
+  now: () => {
+    // skip to end of current transition: snap target -> start, pick fresh target
+    genStart = snapshotGenState()
+    genTarget = pickGenTarget()
+    genT = 0
+    rerollCategorical()
+  },
+}, 'now').name('reroll target')
 
 const fCapture = gui.addFolder('capture')
 fCapture.add(params, 'showBboxes').name('show AABB')
@@ -915,71 +923,205 @@ function randHex(min?: number, max?: number): string {
   const r = randByte(min, max), g = randByte(min, max), b = randByte(min, max)
   return '#' + [r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('')
 }
+const lerp = (a: number, b: number, t: number): number => a + (b - a) * t
 
-function randomizeAll(): void {
+interface GenState {
+  beltColor: string
+  wallColor: string
+  eggColor: string
+  eggColor2: string
+  eggColorVariance: number
+  eggDirtChance: number
+  eggRoughness: number
+  keyAzimuth: number
+  keyElevation: number
+  keyDistance: number
+  keyIntensity: number
+  keyColor: string
+  ambient: number
+  hemi: number
+  fillIntensity: number
+  fillColor: string
+  cameraTilt: number
+  cameraYaw: number
+  cameraDistance: number
+  bgColor: string
+  fogDensity: number
+}
+
+function snapshotGenState(): GenState {
+  return {
+    beltColor: params.beltColor,
+    wallColor: params.wallColor,
+    eggColor: params.eggColor,
+    eggColor2: params.eggColor2,
+    eggColorVariance: params.eggColorVariance,
+    eggDirtChance: params.eggDirtChance,
+    eggRoughness: params.eggRoughness,
+    keyAzimuth: params.keyAzimuth,
+    keyElevation: params.keyElevation,
+    keyDistance: params.keyDistance,
+    keyIntensity: params.keyIntensity,
+    keyColor: params.keyColor,
+    ambient: params.ambient,
+    hemi: params.hemi,
+    fillIntensity: params.fillIntensity,
+    fillColor: params.fillColor,
+    cameraTilt: params.cameraTilt,
+    cameraYaw: params.cameraYaw,
+    cameraDistance: params.cameraDistance,
+    bgColor: '#' + (scene.background as THREE.Color).getHexString(),
+    fogDensity: scene.fog instanceof THREE.FogExp2 ? scene.fog.density : 0.05,
+  }
+}
+
+function pickGenTarget(): GenState {
+  return {
+    beltColor: Math.random() < 0.5 ? '#ffffff' : randHex(140, 250),
+    wallColor: Math.random() < 0.4 ? '#ffffff' : randHex(80, 240),
+    eggColor: randHex(180, 250),
+    eggColor2: Math.random() < 0.4 ? randHex(180, 250) : randHex(80, 220),
+    eggColorVariance: Math.random() * 0.4,
+    eggDirtChance: Math.random() * 0.6,
+    eggRoughness: 0.3 + Math.random() * 0.5,
+    keyAzimuth: (Math.random() - 0.5) * Math.PI * 2,
+    keyElevation: 0.25 + Math.random() * (Math.PI / 2 - 0.3),
+    keyDistance: 1 + Math.random() * 8,
+    keyIntensity: 0.4 + Math.random() * 3.2,
+    keyColor: randHex(180, 255),
+    ambient: Math.random() * 0.45,
+    hemi: Math.random() * 0.4,
+    fillIntensity: Math.random() * 1.5,
+    fillColor: randHex(40, 200),
+    cameraTilt: Math.random() * Math.PI * 0.4,
+    cameraYaw: (Math.random() - 0.5) * Math.PI * 0.6,
+    cameraDistance: 2 + Math.random() * 4,
+    bgColor: randHex(0, 60),
+    fogDensity: 0.02 + Math.random() * 0.1,
+  }
+}
+
+const _cA = new THREE.Color()
+const _cB = new THREE.Color()
+const _cOut = new THREE.Color()
+function lerpColorHex(a: string, b: string, t: number): THREE.Color {
+  _cA.set(a); _cB.set(b)
+  return _cOut.copy(_cA).lerp(_cB, t)
+}
+
+let genStart: GenState = snapshotGenState()
+let genTarget: GenState = pickGenTarget()
+let genT = 0
+let genGuiAccum = 0
+let genActive = false
+
+function rerollCategorical(): void {
   if (params.generalizeBelt) {
-    const newStyle = randPick(BELT_STYLES)
-    if (newStyle !== params.beltStyle) {
-      params.beltStyle = newStyle
+    const ns = randPick(BELT_STYLES)
+    if (ns !== params.beltStyle) {
+      params.beltStyle = ns
       applyBeltStyle()
     }
-    params.beltColor = Math.random() < 0.5 ? '#ffffff' : randHex(140, 250)
-    beltMat.color.set(params.beltColor)
   }
   if (params.generalizeWalls) {
-    const newStyle = randPick(WALL_STYLES)
-    if (newStyle !== params.wallStyle) {
-      params.wallStyle = newStyle
+    const ns = randPick(WALL_STYLES)
+    if (ns !== params.wallStyle) {
+      params.wallStyle = ns
       applyWallStyle()
     }
-    params.wallColor = Math.random() < 0.4 ? '#ffffff' : randHex(80, 240)
-    wallMat.color.set(params.wallColor)
+  }
+}
+
+function genStep(dt: number): void {
+  if (!params.generalize) {
+    if (genActive) genActive = false
+    return
+  }
+  // (re)entering generalize mode
+  if (!genActive) {
+    genActive = true
+    genStart = snapshotGenState()
+    genTarget = pickGenTarget()
+    genT = 0
+    rerollCategorical()
+  }
+
+  genT += dt / Math.max(0.5, params.generalizeInterval)
+  if (genT >= 1) {
+    // start next transition
+    genStart = snapshotGenState()
+    genTarget = pickGenTarget()
+    genT = 0
+    rerollCategorical()
+  }
+
+  // smooth ease-in/out
+  const a = genT
+  const t = a * a * (3 - 2 * a)
+
+  if (params.generalizeBelt) {
+    const c = lerpColorHex(genStart.beltColor, genTarget.beltColor, t)
+    params.beltColor = '#' + c.getHexString()
+    beltMat.color.copy(c)
+  }
+  if (params.generalizeWalls) {
+    const c = lerpColorHex(genStart.wallColor, genTarget.wallColor, t)
+    params.wallColor = '#' + c.getHexString()
+    wallMat.color.copy(c)
   }
   if (params.generalizeEggs) {
-    params.eggColor = randHex(180, 250)
-    params.eggColor2 = Math.random() < 0.4 ? params.eggColor : randHex(80, 220)
-    params.eggColorVariance = Math.random() * 0.4
-    params.eggDirtChance = Math.random() * 0.6
-    params.eggRoughness = 0.3 + Math.random() * 0.5
+    params.eggColor = '#' + lerpColorHex(genStart.eggColor, genTarget.eggColor, t).getHexString()
+    params.eggColor2 = '#' + lerpColorHex(genStart.eggColor2, genTarget.eggColor2, t).getHexString()
+    params.eggColorVariance = lerp(genStart.eggColorVariance, genTarget.eggColorVariance, t)
+    params.eggDirtChance = lerp(genStart.eggDirtChance, genTarget.eggDirtChance, t)
+    params.eggRoughness = lerp(genStart.eggRoughness, genTarget.eggRoughness, t)
     eggBaseMat.roughness = params.eggRoughness
   }
   if (params.generalizeLight) {
-    params.keyAzimuth = (Math.random() - 0.5) * Math.PI * 2
-    params.keyElevation = 0.25 + Math.random() * (Math.PI / 2 - 0.3)
-    params.keyDistance = 1 + Math.random() * 8
-    params.keyIntensity = 0.4 + Math.random() * 3.2
-    params.keyColor = randHex(180, 255)
-    params.ambient = Math.random() * 0.45
-    params.hemi = Math.random() * 0.4
-    params.fillIntensity = Math.random() * 1.5
-    params.fillColor = randHex(40, 200)
-    applyLightAngle(params.keyAzimuth, params.keyElevation, params.keyDistance)
+    params.keyAzimuth = lerp(genStart.keyAzimuth, genTarget.keyAzimuth, t)
+    params.keyElevation = lerp(genStart.keyElevation, genTarget.keyElevation, t)
+    params.keyDistance = lerp(genStart.keyDistance, genTarget.keyDistance, t)
+    params.keyIntensity = lerp(genStart.keyIntensity, genTarget.keyIntensity, t)
     keyLight.intensity = params.keyIntensity
     keyLight2.intensity = params.keyIntensity * 0.6
-    keyLight.color.set(params.keyColor)
-    keyLight2.color.set(params.keyColor)
+    const kc = lerpColorHex(genStart.keyColor, genTarget.keyColor, t)
+    keyLight.color.copy(kc)
+    keyLight2.color.copy(kc)
+    params.keyColor = '#' + kc.getHexString()
+    params.ambient = lerp(genStart.ambient, genTarget.ambient, t)
     ambient.intensity = params.ambient
+    params.hemi = lerp(genStart.hemi, genTarget.hemi, t)
     hemi.intensity = params.hemi
+    params.fillIntensity = lerp(genStart.fillIntensity, genTarget.fillIntensity, t)
     fillLight.intensity = params.fillIntensity
-    fillLight.color.set(params.fillColor)
+    const fc = lerpColorHex(genStart.fillColor, genTarget.fillColor, t)
+    fillLight.color.copy(fc)
+    params.fillColor = '#' + fc.getHexString()
+    applyLightAngle(params.keyAzimuth, params.keyElevation, params.keyDistance)
   }
   if (params.generalizeCamera) {
-    params.cameraTilt = Math.random() * Math.PI * 0.4
-    params.cameraYaw = (Math.random() - 0.5) * Math.PI * 0.6
-    params.cameraDistance = 2 + Math.random() * 4
+    params.cameraTilt = lerp(genStart.cameraTilt, genTarget.cameraTilt, t)
+    params.cameraYaw = lerp(genStart.cameraYaw, genTarget.cameraYaw, t)
+    params.cameraDistance = lerp(genStart.cameraDistance, genTarget.cameraDistance, t)
     applyCameraFromParams()
   }
   if (params.generalizeBg) {
-    const c = new THREE.Color(randHex(0, 60))
-    scene.background = c
-    scene.fog = new THREE.FogExp2(c.getHex(), 0.02 + Math.random() * 0.1)
+    const bg = lerpColorHex(genStart.bgColor, genTarget.bgColor, t)
+    if (scene.background instanceof THREE.Color) scene.background.copy(bg)
+    const fd = lerp(genStart.fogDensity, genTarget.fogDensity, t)
+    if (scene.fog instanceof THREE.FogExp2) {
+      scene.fog.color.copy(bg)
+      scene.fog.density = fd
+    }
   }
-  // refresh GUI controllers so they reflect the new values
-  gui.controllersRecursive().forEach((c) => c.updateDisplay())
-  saveParams()
-}
 
-let lastRandomize = 0
+  // refresh GUI displays a few times per second so sliders/swatches reflect drift
+  genGuiAccum += dt
+  if (genGuiAccum > 0.2) {
+    genGuiAccum = 0
+    gui.controllersRecursive().forEach((c) => c.updateDisplay())
+  }
+}
 
 // ---------------- capture (snapshot, video, labels) ----------------
 function buildLabels(): FrameLabels {
@@ -1114,11 +1256,8 @@ function visualStep(dt: number): void {
   simT += dt
   const t = simT
 
-  // generalization scheduler — fires randomizeAll every interval
-  if (params.generalize && t - lastRandomize >= params.generalizeInterval) {
-    randomizeAll()
-    lastRandomize = t
-  }
+  // generalization mode: smooth transitions between random target states
+  genStep(dt)
 
   let az = params.keyAzimuth
   let el = params.keyElevation
