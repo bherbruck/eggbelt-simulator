@@ -744,7 +744,7 @@ fLight.add(params, 'fillIntensity', 0, 3, 0.05).onChange((v: number) => (fillLig
 fLight.addColor(params, 'fillColor').onChange((v: string) => fillLight.color.set(v))
 fLight.add(params, 'flicker', 0, 0.5, 0.005)
 fLight.add(params, 'lightAutoOrbit').name('auto-orbit')
-fLight.add(params, 'lightOrbitSpeed', 0, 2, 0.01).name('orbit speed')
+fLight.add(params, 'lightOrbitSpeed', 0, 10, 0.01).name('orbit speed')
 
 const fCam = gui.addFolder('camera')
 camCtrls = [
