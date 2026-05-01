@@ -820,6 +820,45 @@ fCapture.add(recordProxy, 'start').name('start recording')
 fCapture.add(recordProxy, 'stop').name('stop recording')
 
 const fMisc = gui.addFolder('misc')
+
+function exportSettings(): void {
+  const out: Record<string, unknown> = {}
+  for (const k of Object.keys(DEFAULTS) as (keyof Params)[]) {
+    out[k as string] = (params as unknown as Record<string, unknown>)[k as string]
+  }
+  downloadJson(out, `eggbelt-settings-${Date.now()}.json`)
+}
+
+function importSettings(): void {
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = 'application/json,.json'
+  input.onchange = async () => {
+    const file = input.files?.[0]
+    if (!file) return
+    let data: Record<string, unknown>
+    try {
+      data = JSON.parse(await file.text()) as Record<string, unknown>
+    } catch (e) {
+      alert(`failed to parse settings JSON: ${e}`)
+      return
+    }
+    const out: Record<string, unknown> = {}
+    for (const k of Object.keys(DEFAULTS) as (keyof Params)[]) {
+      const v = data[k as string]
+      const expected = typeof (DEFAULTS as unknown as Record<string, unknown>)[k as string]
+      if (v !== undefined && typeof v === expected) {
+        out[k as string] = v
+      }
+    }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(out))
+    location.reload()
+  }
+  input.click()
+}
+
+fMisc.add({ exportSettings }, 'exportSettings').name('export settings (.json)')
+fMisc.add({ importSettings }, 'importSettings').name('import settings (.json)')
 fMisc.add({
   resetSettings: () => {
     localStorage.removeItem(STORAGE_KEY)
