@@ -990,6 +990,7 @@ function buildLabels(): FrameLabels {
   for (const e of eggs) {
     e.mesh.updateMatrixWorld(true)
     const bbox = computeAabb(e.verts, e.mesh, camera, w, h)
+    if (!bbox) continue // only include eggs visible to the camera
     const obb = computeObb(e.verts, e.mesh, camera, w, h)
     const p = e.mesh.position
     const q = e.mesh.quaternion
@@ -999,7 +1000,7 @@ function buildLabels(): FrameLabels {
       category: 'egg',
       bbox,
       obb,
-      visible: bbox !== null,
+      visible: true,
       world: {
         position: [p.x, p.y, p.z],
         quaternion: [q.x, q.y, q.z, q.w],
