@@ -9,6 +9,7 @@ import RAPIER from '@dimforge/rapier3d-compat'
 import GUI, { type Controller } from 'lil-gui'
 
 import { CameraFilterShader } from './shaders/camera-filter.js'
+import { makeProceduralBeltMaterial, pickProceduralBeltTarget } from './shaders/procedural-belt.js'
 import {
   computeAabb,
   computeObb,
@@ -351,7 +352,18 @@ let leftWall: THREE.Mesh | undefined
 let rightWall: THREE.Mesh | undefined
 let backWall: THREE.Mesh | undefined
 
+// procedural belt shader material — used when beltStyle = 'procedural'
+const procBeltMat = makeProceduralBeltMaterial()
+const PROC_REPEAT_SCALE = 0.5 // m/tile for procedural belt scrolling
+
 function applyBeltRepeat(): void {
+  if (params.beltStyle === 'procedural') {
+    procBeltMat.uniforms.uRepeat.value.set(
+      params.beltWidth / PROC_REPEAT_SCALE,
+      params.beltLength / PROC_REPEAT_SCALE,
+    )
+    return
+  }
   const r = beltSet.repeatScale
   const rep = new THREE.Vector2(params.beltWidth / r, params.beltLength / r)
   beltSet.map.repeat.copy(rep)
@@ -360,6 +372,13 @@ function applyBeltRepeat(): void {
 }
 
 function applyBeltStyle(): void {
+  if (params.beltStyle === 'procedural') {
+    procBeltMat.uniforms.uTintColor.value.set(params.beltColor)
+    if (beltMesh) beltMesh.material = procBeltMat
+    applyBeltRepeat()
+    return
+  }
+  // standard preset path: regenerate canvas-based PBR material
   const old = beltSet
   beltSet = makeBeltTextureSet(params.beltStyle)
   beltMat.map = beltSet.map
@@ -368,8 +387,9 @@ function applyBeltStyle(): void {
   beltMat.normalScale.set(beltSet.normalScale, beltSet.normalScale)
   beltMat.roughness = beltSet.roughness
   beltMat.metalness = beltSet.metalness
-  // keep user tint
+  beltMat.color.set(params.beltColor)
   beltMat.needsUpdate = true
+  if (beltMesh && beltMesh.material !== beltMat) beltMesh.material = beltMat
   applyBeltRepeat()
   old.map.dispose()
   old.normalMap.dispose()
@@ -447,6 +467,8 @@ function buildColliders(): void {
 function rebuildBelt(): void {
   buildBeltMeshes()
   buildColliders()
+  // re-apply current style — buildBeltMeshes resets to beltMat
+  applyBeltStyle()
 }
 rebuildBelt()
 
@@ -718,7 +740,10 @@ gui.onChange(saveParams)
 
 const fBelt = gui.addFolder('belt')
 fBelt.add(params, 'beltStyle', BELT_STYLES).name('style').onChange(applyBeltStyle)
-fBelt.addColor(params, 'beltColor').name('tint').onChange((v: string) => beltMat.color.set(v))
+fBelt.addColor(params, 'beltColor').name('tint').onChange((v: string) => {
+  beltMat.color.set(v)
+  ;(procBeltMat.uniforms.uTintColor.value as THREE.Color).set(v)
+})
 fBelt.add(params, 'beltSpeed', 0, 2, 0.005)
 fBelt.add(params, 'flowDirection', { '+Z (forward)': 1, '-Z (reverse)': -1 }).name('direction').onChange(rebuildBelt)
 fBelt.add(params, 'beltWidth', 0.8, 5, 0.05).onChange(rebuildBelt)
@@ -837,9 +862,10 @@ fGen.add(params, 'generalizeCamera').name('vary camera')
 fGen.add(params, 'generalizeBg').name('vary background')
 fGen.add({
   now: () => {
-    // skip to end of current transition: snap target -> start, pick fresh target
     genStart = snapshotGenState()
     genTarget = pickGenTarget()
+    procBeltStart = snapshotProcBeltState()
+    procBeltTarget = pickProceduralBeltTarget()
     genT = 0
     rerollCategorical()
   },
@@ -924,6 +950,8 @@ function randHex(min?: number, max?: number): string {
   return '#' + [r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('')
 }
 const lerp = (a: number, b: number, t: number): number => a + (b - a) * t
+
+type ProcBeltState = ReturnType<typeof pickProceduralBeltTarget>
 
 interface GenState {
   beltColor: string
@@ -1015,11 +1043,61 @@ let genT = 0
 let genGuiAccum = 0
 let genActive = false
 
+// procedural belt lerp state — runs in parallel with the GenState lerp
+let procBeltStart: ProcBeltState = pickProceduralBeltTarget()
+let procBeltTarget: ProcBeltState = pickProceduralBeltTarget()
+
+function snapshotProcBeltState(): ProcBeltState {
+  const u = procBeltMat.uniforms
+  const hex = (c: THREE.Color) => '#' + c.getHexString()
+  return {
+    baseColor: hex(u.uBaseColor.value as THREE.Color),
+    tintColor: hex(u.uTintColor.value as THREE.Color),
+    holeAmount: u.uHoleAmount.value as number,
+    holeSize: u.uHoleSize.value as number,
+    holeStagger: u.uHoleStagger.value as number,
+    holeRows: u.uHoleRows.value as number,
+    ribAmount: u.uRibAmount.value as number,
+    ribFreq: u.uRibFreq.value as number,
+    ribPhase: u.uRibPhase.value as number,
+    weaveAmount: u.uWeaveAmount.value as number,
+    weaveFreq: u.uWeaveFreq.value as number,
+    speckleAmount: u.uSpeckleAmount.value as number,
+    speckleScale: u.uSpeckleScale.value as number,
+    grimeAmount: u.uGrimeAmount.value as number,
+    grimeColor: hex(u.uGrimeColor.value as THREE.Color),
+    grimeScale: u.uGrimeScale.value as number,
+    scratchAmount: u.uScratchAmount.value as number,
+  }
+}
+
+function applyProcBeltLerp(t: number): void {
+  const u = procBeltMat.uniforms
+  const a = procBeltStart, b = procBeltTarget
+  ;(u.uBaseColor.value as THREE.Color).copy(lerpColorHex(a.baseColor, b.baseColor, t))
+  ;(u.uTintColor.value as THREE.Color).copy(lerpColorHex(a.tintColor, b.tintColor, t))
+  u.uHoleAmount.value     = lerp(a.holeAmount,    b.holeAmount,    t)
+  u.uHoleSize.value       = lerp(a.holeSize,      b.holeSize,      t)
+  u.uHoleStagger.value    = lerp(a.holeStagger,   b.holeStagger,   t)
+  u.uHoleRows.value       = lerp(a.holeRows,      b.holeRows,      t)
+  u.uRibAmount.value      = lerp(a.ribAmount,     b.ribAmount,     t)
+  u.uRibFreq.value        = lerp(a.ribFreq,       b.ribFreq,       t)
+  u.uRibPhase.value       = lerp(a.ribPhase,      b.ribPhase,      t)
+  u.uWeaveAmount.value    = lerp(a.weaveAmount,   b.weaveAmount,   t)
+  u.uWeaveFreq.value      = lerp(a.weaveFreq,     b.weaveFreq,     t)
+  u.uSpeckleAmount.value  = lerp(a.speckleAmount, b.speckleAmount, t)
+  u.uSpeckleScale.value   = lerp(a.speckleScale,  b.speckleScale,  t)
+  u.uGrimeAmount.value    = lerp(a.grimeAmount,   b.grimeAmount,   t)
+  ;(u.uGrimeColor.value as THREE.Color).copy(lerpColorHex(a.grimeColor, b.grimeColor, t))
+  u.uGrimeScale.value     = lerp(a.grimeScale,    b.grimeScale,    t)
+  u.uScratchAmount.value  = lerp(a.scratchAmount, b.scratchAmount, t)
+}
+
 function rerollCategorical(): void {
   if (params.generalizeBelt) {
-    const ns = randPick(BELT_STYLES)
-    if (ns !== params.beltStyle) {
-      params.beltStyle = ns
+    // generalize mode always uses the procedural shader belt — fully random/continuous
+    if (params.beltStyle !== 'procedural') {
+      params.beltStyle = 'procedural'
       applyBeltStyle()
     }
   }
@@ -1042,6 +1120,8 @@ function genStep(dt: number): void {
     genActive = true
     genStart = snapshotGenState()
     genTarget = pickGenTarget()
+    procBeltStart = snapshotProcBeltState()
+    procBeltTarget = pickProceduralBeltTarget()
     genT = 0
     rerollCategorical()
   }
@@ -1051,6 +1131,8 @@ function genStep(dt: number): void {
     // start next transition
     genStart = snapshotGenState()
     genTarget = pickGenTarget()
+    procBeltStart = snapshotProcBeltState()
+    procBeltTarget = pickProceduralBeltTarget()
     genT = 0
     rerollCategorical()
   }
@@ -1060,9 +1142,10 @@ function genStep(dt: number): void {
   const t = a * a * (3 - 2 * a)
 
   if (params.generalizeBelt) {
-    const c = lerpColorHex(genStart.beltColor, genTarget.beltColor, t)
-    params.beltColor = '#' + c.getHexString()
-    beltMat.color.copy(c)
+    // procedural shader belt: lerp all parametric uniforms continuously
+    applyProcBeltLerp(t)
+    // mirror the tint into params for GUI display + persistence
+    params.beltColor = '#' + (procBeltMat.uniforms.uTintColor.value as THREE.Color).getHexString()
   }
   if (params.generalizeWalls) {
     const c = lerpColorHex(genStart.wallColor, genTarget.wallColor, t)
@@ -1284,10 +1367,29 @@ function visualStep(dt: number): void {
   keyLight.intensity = params.keyIntensity * fk
   keyLight2.intensity = params.keyIntensity * 0.6 * (2 - fk)
 
-  const scroll = (params.beltSpeed * dt * params.flowDirection) / beltSet.repeatScale
-  beltSet.map.offset.y = (beltSet.map.offset.y + scroll) % 1
-  beltSet.normalMap.offset.y = beltSet.map.offset.y
-  if (beltSet.roughnessMap) beltSet.roughnessMap.offset.y = beltSet.map.offset.y
+  if (params.beltStyle === 'procedural') {
+    const proc = (params.beltSpeed * dt * params.flowDirection) / PROC_REPEAT_SCALE
+    const o = procBeltMat.uniforms.uOffset.value as THREE.Vector2
+    o.y = (o.y + proc) % 1
+    // pump current scene lighting into the procedural shader
+    const u = procBeltMat.uniforms
+    const ambCombined = new THREE.Color().copy(ambient.color).multiplyScalar(ambient.intensity)
+      .add(new THREE.Color().copy(hemi.color).multiplyScalar(hemi.intensity * 0.5))
+    u.uAmbient.value.copy(ambCombined)
+    const lp = new THREE.Vector3().copy(keyLight.position).sub(keyLight.target.position).normalize()
+    u.uKeyDir.value.copy(lp)
+    u.uKeyColor.value.copy(keyLight.color)
+    u.uKeyIntensity.value = keyLight.intensity
+    const fp = new THREE.Vector3().copy(fillLight.position).normalize()
+    u.uFillDir.value.copy(fp)
+    u.uFillColor.value.copy(fillLight.color)
+    u.uFillIntensity.value = fillLight.intensity * 0.3
+  } else {
+    const scroll = (params.beltSpeed * dt * params.flowDirection) / beltSet.repeatScale
+    beltSet.map.offset.y = (beltSet.map.offset.y + scroll) % 1
+    beltSet.normalMap.offset.y = beltSet.map.offset.y
+    if (beltSet.roughnessMap) beltSet.roughnessMap.offset.y = beltSet.map.offset.y
+  }
 }
 
 function renderFrame(): void {

@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 
-export type BeltStyle = 'perforated' | 'mylar' | 'streaked' | 'plastic' | 'rubber' | 'dimpled' | 'fabric'
-export const BELT_STYLES: BeltStyle[] = ['perforated', 'mylar', 'streaked', 'plastic', 'rubber', 'dimpled', 'fabric']
+export type BeltStyle = 'procedural' | 'perforated' | 'mylar' | 'streaked' | 'plastic' | 'rubber' | 'dimpled' | 'fabric'
+export const BELT_STYLES: BeltStyle[] = ['procedural', 'perforated', 'mylar', 'streaked', 'plastic', 'rubber', 'dimpled', 'fabric']
 
 export interface BeltTextureSet {
   map: THREE.CanvasTexture
@@ -24,6 +24,9 @@ export function makeBeltTextureSet(style: BeltStyle): BeltTextureSet {
     case 'rubber':     return rubber()
     case 'dimpled':    return dimpled()
     case 'fabric':     return fabric()
+    // procedural is rendered as a ShaderMaterial — caller handles it separately,
+    // but we return a plastic-ish set as a fallback if anyone calls this for it.
+    case 'procedural': return plastic()
   }
 }
 
